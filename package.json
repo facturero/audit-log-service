@@ -1,0 +1,37 @@
+{
+  "name": "audit-log-service",
+  "version": "1.0.0",
+  "description": "Bitácora central de auditoría del ecosistema CRM: consume todos los eventos de crm.events y expone una API de solo lectura con permiso audit:read.",
+  "license": "UNLICENSED",
+  "private": true,
+  "main": "dist/main.js",
+  "scripts": {
+    "dev": "tsx watch src/main.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/main.js",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@facturero/outbox-relay": "^0.1.0",
+    "@hono/node-server": "^1.19.17",
+    "amqplib": "^2.0.1",
+    "dotenv": "^16.4.7",
+    "hono": "^4.13.7",
+    "mysql2": "^3.11.5",
+    "sequelize": "^6.37.5",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/amqplib": "^0.10.7",
+    "@types/node": "^22.20.0",
+    "sequelize-cli": "^6.6.2",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vitest": "^5.0.0"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "type": "commonjs"
+}

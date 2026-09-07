@@ -1,0 +1,114 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: audit-log-service-node
+  labels:
+    app: audit-log-service-node
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: audit-log-service-node
+  template:
+    metadata:
+      labels:
+        app: audit-log-service-node
+    spec:
+      initContainers:
+        - name: audit-migrate
+          image: ${REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}
+          securityContext:
+            runAsUser: 0
+          command:
+            - sh
+            - -c
+            - "npx sequelize-cli db:migrate"
+          env:
+            - name: NODE_ENV
+              value: "production"
+            - name: DB_HOST
+              valueFrom:
+                secretKeyRef:
+                  name: audit-db
+                  key: host
+            - name: DB_PORT
+              valueFrom:
+                secretKeyRef:
+                  name: audit-db
+                  key: port
+            - name: DB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: audit-db
+                  key: user
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: audit-db
+                  key: password
+            - name: DB_NAME
+              valueFrom:
+                secretKeyRef:
+                  name: audit-db
+                  key: name
+      containers:
+        - name: audit-log-service
+          image: ${REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}
+          env:
+            - name: NODE_ENV
+              value: "production"
+            - name: DB_HOST
+              valueFrom:
+                secretKeyRef:
+                  name: audit-db
+                  key: host
+            - name: DB_PORT
+              valueFrom:
+                secretKeyRef:
+                  name: audit-db
+                  key: port
+            - name: DB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: audit-db
+                  key: user
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: audit-db
+                  key: password
+            - name: DB_NAME
+              valueFrom:
+                secretKeyRef:
+                  name: audit-db
+                  key: name
+            - name: RABBITMQ_URL
+              valueFrom:
+                secretKeyRef:
+                  name: audit-rabbitmq
+                  key: url
+            - name: PORT
+              value: "3012"
+            - name: CORS_ORIGIN
+              value: "https://crm.noahsolution.com"
+          ports:
+            - containerPort: 3012
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "100m"
+            limits:
+              memory: "256Mi"
+              cpu: "300m"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 3012
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 3012
+            initialDelaySeconds: 5
+            periodSeconds: 10
