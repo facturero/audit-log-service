@@ -1,4 +1,4 @@
-import { QueryTypes } from 'sequelize';
+import { Op, QueryTypes } from 'sequelize';
 import { AuditDraft } from '../../domain/audit-entry.js';
 import { AuditLogRecord, AuditLogRepository } from '../../domain/repositories.js';
 import { buildAuditWhere, buildRangeSql, ListParams } from '../../application/list-query.js';
@@ -24,25 +24,36 @@ function toRecord(row: AuditLogModel): AuditLogRecord {
 
 /**
  * Implementación sobre audit_db. La inserción usa el `id` determinista
- * (eventId + routingKey) con ON DUPLICATE KEY: un reproceso no duplica la
- * fila; la idempotencia gruesa la da processed_events, esta es la red fina.
+ * (eventId + routingKey): un reproceso cae sobre la misma fila; la idempotencia
+ * gruesa la da processed_events, ésta es la red fina.
  */
 export class SequelizeAuditLogRepository implements AuditLogRepository {
   async insert(draft: AuditDraft): Promise<void> {
-    await AuditLogModel.upsert({
-      id: draft.id,
-      organizationId: draft.organizationId,
-      userId: draft.userId,
-      actorEmail: draft.actorEmail,
-      event: draft.event,
-      resource: draft.resource,
-      action: draft.action,
-      targetId: draft.targetId,
-      ip: draft.ip,
-      requestId: draft.requestId,
-      payload: draft.payload,
-      occurredAt: draft.occurredAt,
+    // findOrCreate y NO upsert: la bitácora es inmutable. Con upsert, reprocesar
+    // un evento REESCRIBÍA la fila existente — es decir, se podía reescribir la
+    // historia republicando el evento. Si ya existe, se deja como está.
+    await AuditLogModel.findOrCreate({
+      where: { id: draft.id },
+      defaults: {
+        id: draft.id,
+        organizationId: draft.organizationId,
+        userId: draft.userId,
+        actorEmail: draft.actorEmail,
+        event: draft.event,
+        resource: draft.resource,
+        action: draft.action,
+        targetId: draft.targetId,
+        ip: draft.ip,
+        requestId: draft.requestId,
+        payload: draft.payload,
+        occurredAt: draft.occurredAt,
+      },
     });
+  }
+
+  /** Purga por retención. Devuelve cuántas filas se borraron. */
+  async deleteOlderThan(cutoff: Date): Promise<number> {
+    return AuditLogModel.destroy({ where: { occurredAt: { [Op.lt]: cutoff } } });
   }
 
   async find(
@@ -65,7 +76,14 @@ export class SequelizeAuditLogRepository implements AuditLogRepository {
   }
 
   async findById(organizationId: string, id: string): Promise<AuditLogRecord | null> {
-    const row = await AuditLogModel.findOne({ where: { id, organizationId } });
+    // Los eventos de plataforma (organization_id NULL) también son visibles en
+    // detalle: si se listan con includePlatform, abrirlos no puede dar 404.
+    const row = await AuditLogModel.findOne({
+      where: {
+        id,
+        [Op.or]: [{ organizationId }, { organizationId: null }],
+      },
+    });
     return row ? toRecord(row) : null;
   }
 

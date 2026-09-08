@@ -12,6 +12,11 @@ const listQuerySchema = z.object({
   search: z.string().trim().max(200).optional(),
   limit: z.coerce.number().int().min(1).max(500).optional(),
   offset: z.coerce.number().int().min(0).optional(),
+  // z.coerce.boolean() no sirve: convierte la cadena "false" en true.
+  includePlatform: z
+    .enum(['true', 'false'])
+    .optional()
+    .transform((v) => v === 'true'),
 });
 
 export type AuditLogQueryContext = Context<{ Variables: ContextVariables }>;

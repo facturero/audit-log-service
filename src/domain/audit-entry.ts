@@ -65,6 +65,65 @@ function asString(value: unknown): string | null {
   return trimmed;
 }
 
+/** Claves cuyo VALOR nunca debe entrar en la bitácora. La bitácora es
+ *  inmutable y la lee cualquiera con `audit:read`: un secreto que caiga aquí
+ *  queda expuesto para siempre. Casos reales hoy: `identity.user.invited`
+ *  publica `inviteUrl` y `identity.user.password_reset_requested` publica
+ *  `resetUrl`, ambos con el token en claro — con ellos se toma una cuenta. */
+const SENSITIVE_KEY_PATTERN =
+  /(token|secret|password|passwd|authorization|credential|api[-_]?key|signature|private|otp|inviteurl|reseturl)/i;
+
+/** Un secreto también puede llegar en un campo con nombre inocente. Se redacta
+ *  el valor si parece un JWT o una URL que lleva el token en la query. */
+const SENSITIVE_VALUE_PATTERN = /(^eyJ[\w-]+\.[\w-]+\.)|([?&](token|code|key|secret)=)/i;
+
+const REDACTED = '[redacted]';
+/** Tope del JSON persistido. `billing.invoice.issued` arrastra todas las
+ *  líneas, impuestos y snapshots: sin tope la tabla crece sin control y el
+ *  `search` (LIKE sobre JSON) se vuelve impagable. */
+const MAX_PAYLOAD_BYTES = 8 * 1024;
+const MAX_DEPTH = 6;
+
+function redactValue(value: unknown, depth: number): unknown {
+  if (depth > MAX_DEPTH) return REDACTED;
+  if (Array.isArray(value)) return value.map((v) => redactValue(v, depth + 1));
+  if (value && typeof value === 'object') {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      out[k] = SENSITIVE_KEY_PATTERN.test(k) ? REDACTED : redactValue(v, depth + 1);
+    }
+    return out;
+  }
+  if (typeof value === 'string' && SENSITIVE_VALUE_PATTERN.test(value)) return REDACTED;
+  return value;
+}
+
+/**
+ * Deja el payload en algo que se pueda guardar y enseñar: sin secretos y con
+ * un tamaño acotado. Si tras redactar sigue pasándose de `MAX_PAYLOAD_BYTES`
+ * se conservan solo los escalares de primer nivel (los que sirven para
+ * entender el evento) y se marca el recorte, en vez de tirar el payload entero.
+ */
+export function redactPayload(
+  payload: Record<string, unknown>,
+): Record<string, unknown> | null {
+  if (Object.keys(payload).length === 0) return null;
+
+  const redacted = redactValue(payload, 0) as Record<string, unknown>;
+  const serialized = JSON.stringify(redacted);
+  if (serialized !== undefined && Buffer.byteLength(serialized, 'utf8') <= MAX_PAYLOAD_BYTES) {
+    return redacted;
+  }
+
+  const trimmed: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(redacted)) {
+    if (v === null || ['string', 'number', 'boolean'].includes(typeof v)) trimmed[k] = v;
+  }
+  trimmed._truncated = true;
+  trimmed._originalBytes = Buffer.byteLength(serialized ?? '', 'utf8');
+  return trimmed;
+}
+
 /** Posibles ids de recurso afectado dentro del payload. El "target" de la
  *  acción es un best-effort: cada dominio publica el suyo (invoiceId, ...). */
 const TARGET_CANDIDATES = [
@@ -79,12 +138,22 @@ const TARGET_CANDIDATES = [
   'documentTypeId',
   'identificationTypeId',
   'roleId',
+  'categoryId',
+  'unitId',
+  'addressId',
+  'contactId',
+  'tagId',
+  'fileId',
   'taxRateId',
   'rateId',
   'countryId',
   'credentialId',
   'posDeviceId',
   'pluginRequestId',
+  // Último a propósito: en los eventos de identidad `userId` es el usuario
+  // AFECTADO (el que se desactiva, el invitado), no quien ejecuta la acción.
+  // Si ningún id más específico encaja, ése es el target.
+  'userId',
 ] as const;
 
 function firstTargetId(payload: Record<string, unknown>): string | null {
@@ -130,15 +199,20 @@ export function extractAuditEntry(input: ExtractAuditEntryInput): AuditDraft | n
   return {
     id: deterministicUuidV5(`${eventId}:${routingKey}`),
     organizationId,
-    userId: asString(payload.userId ?? payload.actorId),
-    actorEmail: asString(payload.actorEmail ?? payload.userEmail),
+    // SOLO campos de actor explícitos. `payload.userId` NO vale: en
+    // `identity.user.disabled` es el usuario desactivado, no el admin que lo
+    // desactivó — atribuir la acción a la víctima es peor que dejarlo en NULL.
+    // Quien ejecuta la acción viaja en `actorId`/`actorEmail` (los inyecta el
+    // outbox de cada servicio desde el contexto de la petición).
+    userId: asString(payload.actorId ?? payload.actorUserId),
+    actorEmail: asString(payload.actorEmail),
     event: routingKey,
     resource,
     action,
     targetId: firstTargetId(payload),
-    ip: asString(payload.ip),
+    ip: asString(payload.actorIp ?? payload.ip),
     requestId: asString(payload.requestId ?? payload.correlationId) ?? asString(correlationId),
-    payload: Object.keys(payload).length > 0 ? payload : null,
+    payload: redactPayload(payload),
     occurredAt,
   };
 }

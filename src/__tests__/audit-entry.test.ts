@@ -3,6 +3,7 @@ import {
   deriveResourceAndAction,
   deterministicUuidV5,
   extractAuditEntry,
+  redactPayload,
   summarize,
 } from '../domain/audit-entry.js';
 
@@ -55,6 +56,7 @@ describe('extractAuditEntry', () => {
       ...base,
       payload: {
         ...base.payload,
+        actorId: 'act-1',
         actorEmail: 'a@x.com',
         ip: '1.2.3.4',
         requestId: 'req-1',
@@ -65,7 +67,7 @@ describe('extractAuditEntry', () => {
     const d = draft!;
     expect(d.id).toBe(deterministicUuidV5('evt-1:billing.invoice.issued'));
     expect(d.organizationId).toBe('org-1');
-    expect(d.userId).toBe('usr-1');
+    expect(d.userId).toBe('act-1');
     expect(d.actorEmail).toBe('a@x.com');
     expect(d.event).toBe('billing.invoice.issued');
     expect(d.resource).toBe('invoice');
@@ -110,10 +112,121 @@ describe('extractAuditEntry', () => {
     expect(draft!.userId).toBeNull();
     expect(draft!.targetId).toBe('inv-1');
   });
+
+  it('NO atribuye la acción al usuario afectado: payload.userId es el target', () => {
+    // identity.user.disabled publica el usuario DESACTIVADO en `userId`. Antes
+    // acababa en la columna de actor y la bitácora decía que la víctima se
+    // desactivó a sí misma.
+    const draft = extractAuditEntry({
+      routingKey: 'identity.user.disabled',
+      eventId: 'evt-9',
+      payload: { userId: 'victima-1', organizationId: 'org-1' },
+    });
+    expect(draft!.userId).toBeNull();
+    expect(draft!.targetId).toBe('victima-1');
+  });
+
+  it('con actor explícito distingue quién actúa y sobre quién', () => {
+    const draft = extractAuditEntry({
+      routingKey: 'identity.user.disabled',
+      eventId: 'evt-10',
+      payload: {
+        userId: 'victima-1',
+        actorId: 'admin-1',
+        actorEmail: 'admin@x.com',
+        organizationId: 'org-1',
+      },
+    });
+    expect(draft!.userId).toBe('admin-1');
+    expect(draft!.actorEmail).toBe('admin@x.com');
+    expect(draft!.targetId).toBe('victima-1');
+  });
+
+  it('nunca persiste el enlace de reseteo ni el de invitación', () => {
+    const reset = extractAuditEntry({
+      routingKey: 'identity.user.password_reset_requested',
+      eventId: 'evt-11',
+      payload: {
+        userId: 'usr-1',
+        organizationId: 'org-1',
+        resetUrl: 'https://crm.test/restablecer-contrasena?token=SECRETO',
+      },
+    });
+    expect(reset!.payload!.resetUrl).toBe('[redacted]');
+    expect(JSON.stringify(reset!.payload)).not.toContain('SECRETO');
+
+    const invite = extractAuditEntry({
+      routingKey: 'identity.user.invited',
+      eventId: 'evt-12',
+      payload: { organizationId: 'org-1', inviteUrl: 'https://crm.test/accept?token=OTRO' },
+    });
+    expect(JSON.stringify(invite!.payload)).not.toContain('OTRO');
+  });
+});
+
+describe('redactPayload', () => {
+  it('redacta por nombre de clave, a cualquier profundidad', () => {
+    const out = redactPayload({
+      ok: 'visible',
+      apiKey: 'k',
+      nested: { password: 'p', deeper: [{ accessToken: 't' }] },
+    })!;
+    expect(out.ok).toBe('visible');
+    expect(out.apiKey).toBe('[redacted]');
+    expect((out.nested as any).password).toBe('[redacted]');
+    expect((out.nested as any).deeper[0].accessToken).toBe('[redacted]');
+  });
+
+  it('redacta por valor un JWT o una URL con token, aunque la clave sea inocente', () => {
+    const out = redactPayload({
+      nota: 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.firma',
+      enlace: 'https://x.test/a?token=abc',
+      normal: 'https://x.test/factura/1',
+    })!;
+    expect(out.nota).toBe('[redacted]');
+    expect(out.enlace).toBe('[redacted]');
+    expect(out.normal).toBe('https://x.test/factura/1');
+  });
+
+  it('recorta payloads enormes conservando los escalares de primer nivel', () => {
+    const out = redactPayload({
+      invoiceId: 'inv-1',
+      number: '001-001-1',
+      lines: Array.from({ length: 500 }, (_, i) => ({ i, description: 'x'.repeat(50) })),
+    })!;
+    expect(out._truncated).toBe(true);
+    expect(out.invoiceId).toBe('inv-1');
+    expect(out.number).toBe('001-001-1');
+    expect(out.lines).toBeUndefined();
+  });
+
+  it('payload vacío = null', () => {
+    expect(redactPayload({})).toBeNull();
+  });
 });
 
 describe('summarize', () => {
   it('humaniza la acción para el listado', () => {
     expect(summarize('identity.user.role_assigned')).toBe('user role assigned');
+  });
+});
+describe('target_id de los eventos nuevos', () => {
+  // Al añadir eventos de catálogo (categorías, unidades, direcciones,
+  // contactos, etiquetas, ficheros) sus ids tienen que resolverse como target,
+  // o la bitácora dice "se creó algo" sin decir qué.
+  it.each([
+    ['product.category.created', 'categoryId'],
+    ['product.unit.created', 'unitId'],
+    ['customer.address.added', 'addressId'],
+    ['customer.contact.added', 'contactId'],
+    ['customer.tag.created', 'tagId'],
+    ['document.file.attached', 'fileId'],
+  ])('%s resuelve el target desde %s', (routingKey, key) => {
+    const draft = extractAuditEntry({
+      routingKey,
+      eventId: `evt-${key}`,
+      payload: { organizationId: 'org-1', [key]: 'target-123' },
+    });
+    expect(draft!.targetId).toBe('target-123');
   });
 });

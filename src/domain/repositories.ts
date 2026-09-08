@@ -1,4 +1,5 @@
 import { AuditDraft } from './audit-entry.js';
+import type { ListParams } from '../application/list-query.js';
 
 /** Fila de AUDIT_LOG tal como la devuelve la persistencia. */
 export interface AuditLogRecord {
@@ -20,9 +21,11 @@ export interface AuditLogRecord {
 /** Puerto de persistencia. La implementación solo se comunica con audit_db. */
 export interface AuditLogRepository {
   insert(draft: AuditDraft): Promise<void>;
+  /** Borra lo anterior a `cutoff` (política de retención). Devuelve el nº de filas. */
+  deleteOlderThan(cutoff: Date): Promise<number>;
   find(
     organizationId: string,
-    params: { event?: string; userId?: string; targetId?: string; from?: string; to?: string; search?: string },
+    params: ListParams,
     limit: number,
     offset: number,
   ): Promise<{ rows: AuditLogRecord[]; total: number }>;

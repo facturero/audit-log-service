@@ -1,0 +1,233 @@
+openapi: 3.0.3
+
+info:
+  title: audit-log-service API
+  version: 1.0.0
+  description: >
+    Bitácora central de auditoría: quién hizo qué, cuándo y desde dónde. Registra
+    TODO lo que pasa por el exchange `crm.events` (la cola bindea `#` y el handler
+    es comodín), así que un evento nuevo queda auditado sin tocar este servicio.
+
+
+    La API es de **solo lectura**: la única escritura entra por RabbitMQ. Toda ruta
+    exige el permiso `audit:read` — lo comprueba el api-gateway antes de enrutar y,
+    en profundidad, este servicio contra la cabecera `X-Permissions`.
+
+
+    No verifica JWT: confía en las cabeceras que inyecta el gateway
+    (`X-Organization-Id`, `X-User-Id`, `X-Permissions`). El aislamiento por tenant
+    es obligatorio: `organization_id` está siempre en el WHERE y es la columna
+    líder de los tres índices.
+
+servers:
+  - url: http://localhost:3012
+    description: Desarrollo local (puerto interno; en producción va tras el api-gateway)
+
+tags:
+  - name: health
+  - name: audit-logs
+
+components:
+  parameters:
+    OrganizationId:
+      name: X-Organization-Id
+      in: header
+      required: true
+      schema: { type: string, format: uuid }
+      description: Tenant. Lo inyecta el gateway desde el claim `org_id`.
+    Permissions:
+      name: X-Permissions
+      in: header
+      required: true
+      schema: { type: string }
+      description: Lista separada por comas. Debe contener `audit:read` (o `*`).
+  schemas:
+    AuditLogListItem:
+      type: object
+      properties:
+        id: { type: string, format: uuid, description: "Determinista: uuid v5 de (eventId, routingKey)" }
+        event: { type: string, example: billing.invoice.issued, description: Routing key completa }
+        resource: { type: string, example: invoice }
+        action: { type: string, example: issued }
+        organizationId: { type: string, format: uuid, nullable: true, description: "null = evento de plataforma" }
+        userId: { type: string, nullable: true, description: "Quién EJECUTÓ la acción (actorId del evento); null = sistema" }
+        userEmail: { type: string, nullable: true }
+        targetId: { type: string, nullable: true, description: Recurso afectado (invoiceId, customerId, el usuario desactivado...) }
+        ip: { type: string, nullable: true, description: IP del cliente resuelta por el gateway }
+        requestId: { type: string, nullable: true }
+        occurredAt: { type: string, format: date-time }
+        summary: { type: string, example: invoice issued }
+    AuditLogDetail:
+      allOf:
+        - $ref: '#/components/schemas/AuditLogListItem'
+        - type: object
+          properties:
+            payload:
+              type: object
+              nullable: true
+              additionalProperties: true
+              description: >
+                Subconjunto del evento, ya redactado: los campos con pinta de
+                secreto (tokens, enlaces de reseteo o invitación, contraseñas)
+                se guardan como `[redacted]`. Si el original excedía 8 KiB solo
+                se conservan los escalares de primer nivel y se marca
+                `_truncated`.
+    Error:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code: { type: string }
+            message: { type: string }
+
+paths:
+  /health:
+    get:
+      tags: [health]
+      summary: Healthcheck
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: ok }
+
+  /audit-logs:
+    get:
+      tags: [audit-logs]
+      summary: Lista la bitácora de la organización
+      description: >
+        Ordenado por `occurred_at` descendente. Requiere `audit:read`.
+      parameters:
+        - $ref: '#/components/parameters/OrganizationId'
+        - $ref: '#/components/parameters/Permissions'
+        - name: event
+          in: query
+          schema: { type: string, maxLength: 200 }
+          description: >
+            Routing key exacta (`billing.invoice.issued`) o prefijo si acaba en
+            punto (`billing.` → todo lo de facturación).
+        - name: userId
+          in: query
+          schema: { type: string, maxLength: 36 }
+          description: Filtra por quién ejecutó la acción.
+        - name: targetId
+          in: query
+          schema: { type: string, maxLength: 36 }
+          description: Filtra por el recurso afectado.
+        - name: from
+          in: query
+          schema: { type: string, format: date-time }
+        - name: to
+          in: query
+          schema: { type: string, format: date-time }
+        - name: search
+          in: query
+          schema: { type: string, maxLength: 200 }
+          description: >
+            Busca en el payload y en el email del actor. Es un LIKE sobre JSON
+            (no puede usar índice); pensado para una consulta puntual, no para
+            listados masivos.
+        - name: includePlatform
+          in: query
+          schema: { type: string, enum: ['true', 'false'] }
+          description: >
+            Incluye los eventos sin tenant (`organization_id` NULL): cambios de
+            catálogo global. No son de otra organización — no tienen ninguna —,
+            así que no rompen el aislamiento.
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 500, default: 50 }
+        - name: offset
+          in: query
+          schema: { type: integer, minimum: 0, default: 0 }
+      responses:
+        '200':
+          description: Página de resultados
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/AuditLogListItem' }
+                  total: { type: integer }
+                  limit: { type: integer }
+                  offset: { type: integer }
+        '400':
+          description: Falta `X-Organization-Id` o la query es inválida
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '403':
+          description: Falta el permiso `audit:read`
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /audit-logs/summary:
+    get:
+      tags: [audit-logs]
+      summary: Agregados por día
+      description: >
+        Dos series: eventos por día y **usuarios por día**, que es la vista de
+        "qué ha estado haciendo cada quién". Máximo 500 filas por serie.
+      parameters:
+        - $ref: '#/components/parameters/OrganizationId'
+        - $ref: '#/components/parameters/Permissions'
+        - name: from
+          in: query
+          schema: { type: string, format: date-time }
+        - name: to
+          in: query
+          schema: { type: string, format: date-time }
+      responses:
+        '200':
+          description: Agregados
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  byEvent: &summaryRows
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        day: { type: string, format: date }
+                        group: { type: string }
+                        count: { type: integer }
+                  byUser: *summaryRows
+        '403':
+          description: Falta el permiso `audit:read`
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /audit-logs/{id}:
+    get:
+      tags: [audit-logs]
+      summary: Detalle de un evento, con su payload
+      parameters:
+        - $ref: '#/components/parameters/OrganizationId'
+        - $ref: '#/components/parameters/Permissions'
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Evento
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuditLogDetail' }
+        '404':
+          description: No existe, o es de otra organización
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }

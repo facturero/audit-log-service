@@ -13,7 +13,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@facturero/outbox-relay": "^0.1.0",
+    "@facturero/outbox-relay": "^0.2.0",
     "@hono/node-server": "^1.19.17",
     "amqplib": "^2.0.1",
     "dotenv": "^16.4.7",

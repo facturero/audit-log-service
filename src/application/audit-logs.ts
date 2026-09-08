@@ -64,6 +64,17 @@ export class AuditLogService {
     await this.repo.insert(draft);
   }
 
+  /**
+   * Retención: borra lo anterior a la ventana. Con `retentionDays <= 0` no
+   * borra nada — el default es conservar, porque purgar una bitácora sin que
+   * alguien lo haya decidido es peor que gastar disco.
+   */
+  async purge(retentionDays: number): Promise<number> {
+    if (retentionDays <= 0) return 0;
+    const cutoff = new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1000);
+    return this.repo.deleteOlderThan(cutoff);
+  }
+
   async list(organizationId: string, params: ListParams): Promise<AuditLogPageDTO> {
     const { limit, offset } = normalizePagination(params.limit, params.offset);
     const { rows, total } = await this.repo.find(organizationId, params, limit, offset);

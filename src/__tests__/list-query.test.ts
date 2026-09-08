@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { Op } from 'sequelize';
-import { buildAuditWhere, normalizePagination } from '../application/list-query.js';
+import { buildAuditWhere, escapeLike, normalizePagination } from '../application/list-query.js';
+
+/** El WHERE es `{ [Op.and]: [...] }`; los tests miran dentro de esa lista. */
+function clausesOf(where: Record<PropertyKey, unknown>): Array<Record<PropertyKey, unknown>> {
+  return where[Op.and] as Array<Record<PropertyKey, unknown>>;
+}
 
 describe('normalizePagination', () => {
   it('por defecto 50 y 0', () => {
@@ -13,38 +18,64 @@ describe('normalizePagination', () => {
   });
 });
 
+describe('escapeLike', () => {
+  it('neutraliza los comodines de LIKE', () => {
+    expect(escapeLike('100%')).toBe('100\\%');
+    expect(escapeLike('a_b')).toBe('a\\_b');
+    expect(escapeLike('c:\\tmp')).toBe('c:\\\\tmp');
+  });
+});
+
 describe('buildAuditWhere', () => {
   it('siempre aísla por organización', () => {
-    const where = buildAuditWhere('org-1', {});
-    expect(where).toEqual({ organizationId: 'org-1' });
+    const clauses = clausesOf(buildAuditWhere('org-1', {}));
+    expect(clauses).toEqual([{ organizationId: 'org-1' }]);
+  });
+
+  it('sin includePlatform NO se ven los eventos sin tenant', () => {
+    const [tenant] = clausesOf(buildAuditWhere('org-1', {}));
+    expect(tenant).toEqual({ organizationId: 'org-1' });
+    expect(Object.getOwnPropertySymbols(tenant)).toHaveLength(0);
+  });
+
+  it('includePlatform amplía a organization_id NULL, nunca a otro tenant', () => {
+    const [tenant] = clausesOf(buildAuditWhere('org-1', { includePlatform: true }));
+    expect(tenant[Op.or]).toEqual([{ organizationId: 'org-1' }, { organizationId: null }]);
   });
 
   it('event exacto = igualdad, prefijo con punto final = LIKE', () => {
-    const exact = buildAuditWhere('org-1', { event: 'billing.invoice.issued' });
-    expect(exact.event).toBe('billing.invoice.issued');
+    const [, exact] = clausesOf(buildAuditWhere('org-1', { event: 'billing.invoice.issued' }));
+    expect(exact).toEqual({ event: 'billing.invoice.issued' });
 
-    const prefixed = buildAuditWhere('org-1', { event: 'billing.' });
-    expect(prefixed.event).toEqual({ [Op.like]: 'billing.%' });
+    const [, prefixed] = clausesOf(buildAuditWhere('org-1', { event: 'billing.' }));
+    expect(prefixed).toEqual({ event: { [Op.like]: 'billing.%' } });
   });
 
   it('from/to se combinan como ventana de occurredAt', () => {
-    const { occurredAt } = buildAuditWhere('org-1', {
-      from: '2026-09-01T00:00:00Z',
-      to: '2026-09-07T00:00:00Z',
-    }) as { occurredAt: Record<PropertyKey, unknown> };
-    // Las claves de Op sont symbols: Object.keys() los ignora.
-    expect(Object.getOwnPropertySymbols(occurredAt).map(String).sort()).toEqual([
+    const [, range] = clausesOf(
+      buildAuditWhere('org-1', { from: '2026-09-01T00:00:00Z', to: '2026-09-07T00:00:00Z' }),
+    );
+    const occurred = range.occurredAt as Record<PropertyKey, unknown>;
+    // Las claves de Op son symbols: Object.keys() los ignora.
+    expect(Object.getOwnPropertySymbols(occurred).map(String).sort()).toEqual([
       'Symbol(gte)',
       'Symbol(lte)',
     ]);
   });
 
-  it('search busca en payload o actor', () => {
-    const where = buildAuditWhere('org-1', { search: 'factura' }) as Record<
-      PropertyKey,
-      unknown
-    > & { [Op.or]: Record<string, unknown>[] };
-    expect(Array.isArray(where[Op.or])).toBe(true);
-    expect(where[Op.or]).toHaveLength(2);
+  it('search busca en payload o actor, y escapa los comodines', () => {
+    const [, search] = clausesOf(buildAuditWhere('org-1', { search: '50%' }));
+    const or = search[Op.or] as Array<Record<string, Record<PropertyKey, string>>>;
+    expect(or).toHaveLength(2);
+    expect(or[0].payload[Op.like]).toBe('%50\\%%');
+    expect(or[1].actorEmail[Op.like]).toBe('%50\\%%');
+  });
+
+  it('el filtro de tenant sobrevive junto a un search con Op.or', () => {
+    const clauses = clausesOf(buildAuditWhere('org-1', { search: 'factura' }));
+    // El bug que evita el Op.and: antes `where[Op.or]` del search y el de
+    // includePlatform compartían clave y uno pisaba al otro.
+    expect(clauses[0]).toEqual({ organizationId: 'org-1' });
+    expect(clauses).toHaveLength(2);
   });
 });

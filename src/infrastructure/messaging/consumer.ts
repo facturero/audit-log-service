@@ -1,6 +1,6 @@
 import { ConsumeMessage } from 'amqplib';
-import { EventHandler, InboxConsumer } from '@facturero/outbox-relay';
-import { AUDITED_EVENTS } from '../../config.js';
+import { CATCH_ALL_EVENT_TYPE, EventHandler, InboxConsumer } from '@facturero/outbox-relay';
+import { isAudited } from '../../config.js';
 import { AuditLogService } from '../../application/audit-logs.js';
 import { extractAuditEntry } from '../../domain/audit-entry.js';
 import { sequelize } from '../persistence/models.js';
@@ -10,10 +10,13 @@ const QUEUE = 'audit-log-service.events';
 
 async function handleAudit(
   service: AuditLogService,
-  eventType: string,
   payload: unknown,
   msg: ConsumeMessage,
 ): Promise<void> {
+  const eventType = msg.fields.routingKey;
+
+  if (!isAudited(eventType)) return;
+
   // La idempotencia del relay depende de eventId (headers): sin él no se puede
   // garantizar "un evento = una fila" y el evento no es auditable.
   const eventId = msg.properties.headers?.eventId;
@@ -46,10 +49,14 @@ async function handleAudit(
 }
 
 export function buildHandlers(service: AuditLogService): EventHandler[] {
-  return AUDITED_EVENTS.map((eventType) => ({
-    eventType,
-    handle: (payload: unknown, msg: ConsumeMessage) => handleAudit(service, eventType, payload, msg),
-  }));
+  // Un solo handler comodín: la bitácora registra TODO lo que pase por el
+  // exchange. Ver AUDIT_DENYLIST en config.ts.
+  return [
+    {
+      eventType: CATCH_ALL_EVENT_TYPE,
+      handle: (payload: unknown, msg: ConsumeMessage) => handleAudit(service, payload, msg),
+    },
+  ];
 }
 
 /** Consumidor catch-all de crm.events vía la librería outbox-relay. Nada de
@@ -67,8 +74,8 @@ export class AuditConsumer {
       rabbitmqUrl,
       exchange: EXCHANGE,
       queue: QUEUE,
-      // Catch-all: registra TODO lo que pase por el exchange; los eventos sin
-      // handler del catálogo se descartan con warn (ver AUDITED_EVENTS).
+      // Catch-all de verdad: la cola recibe todo y el handler comodín lo
+      // registra todo (ver AUDIT_DENYLIST para excluir ruido concreto).
       bindings: ['#'],
       handlers: buildHandlers(service),
     });

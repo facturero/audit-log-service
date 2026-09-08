@@ -82,7 +82,9 @@ AuditLogModel.init(
     event: { type: DataTypes.STRING(200), allowNull: false },
     resource: { type: DataTypes.STRING(100), allowNull: false },
     action: { type: DataTypes.STRING(100), allowNull: false },
-    targetId: { type: DataTypes.CHAR(36), allowNull: true, field: 'target_id' },
+    // STRING(128) y no CHAR(36): el target es best-effort sobre el payload y no
+    // todo dominio publica uuids (ver migración 20260907130000).
+    targetId: { type: DataTypes.STRING(128), allowNull: true, field: 'target_id' },
     ip: { type: DataTypes.STRING(45), allowNull: true },
     requestId: { type: DataTypes.STRING(100), allowNull: true, field: 'request_id' },
     payload: { type: DataTypes.JSON, allowNull: true },

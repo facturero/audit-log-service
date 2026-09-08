@@ -91,6 +91,10 @@ spec:
               value: "3012"
             - name: CORS_ORIGIN
               value: "https://crm.noahsolution.com"
+            # 0 = conservar para siempre. Una bitácora no se purga sola sin que
+            # alguien decida la ventana; se deja explícito para que se vea.
+            - name: AUDIT_RETENTION_DAYS
+              value: "0"
           ports:
             - containerPort: 3012
           resources:
