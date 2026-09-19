@@ -95,6 +95,45 @@ export function buildAuditWhere(
   return { [Op.and]: clauses };
 }
 
+/** Espejo en SQL crudo de buildAuditWhere, para el COUNT acotado del listado
+ *  (contar sobre findAndCountAll escaneaba toda la tabla → timeouts). Mismas
+ *  cláusulas y mismo aislamiento por tenant; columnas en snake_case. */
+export function buildAuditWhereSql(
+  organizationId: string,
+  params: ListParams,
+): { sql: string; replacements: Record<string, unknown> } {
+  const clauses: string[] = [];
+  const r: Record<string, unknown> = {};
+
+  if (params.includePlatform) {
+    clauses.push('(organization_id = :org OR organization_id IS NULL)');
+  } else {
+    clauses.push('organization_id = :org');
+  }
+  r.org = organizationId;
+
+  if (params.event?.trim()) {
+    const event = params.event.trim();
+    if (event.endsWith('.')) {
+      clauses.push("event LIKE :event ESCAPE '\\\\'");
+      r.event = `${escapeLike(event)}%`;
+    } else {
+      clauses.push('event = :eventEq');
+      r.eventEq = event;
+    }
+  }
+  if (params.userId?.trim()) { clauses.push('user_id = :uid'); r.uid = params.userId.trim(); }
+  if (params.targetId?.trim()) { clauses.push('target_id = :tid'); r.tid = params.targetId.trim(); }
+  if (params.from) { clauses.push('occurred_at >= :from'); r.from = new Date(params.from); }
+  if (params.to) { clauses.push('occurred_at <= :to'); r.to = new Date(params.to); }
+  if (params.search?.trim()) {
+    clauses.push("(payload LIKE :search ESCAPE '\\\\' OR actor_email LIKE :search ESCAPE '\\\\')");
+    r.search = `%${escapeLike(params.search.trim())}%`;
+  }
+
+  return { sql: clauses.join(' AND '), replacements: r };
+}
+
 /** Rango para summary: solo se aplica si viene `from`/`to` (ventana opcional). */
 export function buildRangeSql(params: RangeParams): { sql: string; replacements: Record<string, unknown> } {
   const clauses: string[] = [];

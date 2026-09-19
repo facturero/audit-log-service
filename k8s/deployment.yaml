@@ -101,9 +101,8 @@ spec:
             requests:
               memory: "128Mi"
               cpu: "100m"
-            limits:
-              memory: "256Mi"
-              cpu: "300m"
+            # limits removidos a propósito: midiendo maximos RPS sin techos
+            # artificiales de CPU/memoria. Re-anadir holgados tras medir.
           livenessProbe:
             httpGet:
               path: /health

@@ -1,7 +1,7 @@
 import { Op, QueryTypes } from 'sequelize';
 import { AuditDraft } from '../../domain/audit-entry.js';
 import { AuditLogRecord, AuditLogRepository } from '../../domain/repositories.js';
-import { buildAuditWhere, buildRangeSql, ListParams } from '../../application/list-query.js';
+import { buildAuditWhere, buildAuditWhereSql, buildRangeSql, ListParams } from '../../application/list-query.js';
 import { AuditLogModel } from './models.js';
 
 function toRecord(row: AuditLogModel): AuditLogRecord {
@@ -63,7 +63,9 @@ export class SequelizeAuditLogRepository implements AuditLogRepository {
     offset: number,
   ): Promise<{ rows: AuditLogRecord[]; total: number }> {
     const where = buildAuditWhere(organizationId, params);
-    const { rows, count } = await AuditLogModel.findAndCountAll({
+    // Filas por el índice (rápido). El COUNT de findAndCountAll escaneaba TODAS
+    // las filas del org (94k+) → 0.7s warm / ~10s en frío y timeouts bajo carga.
+    const rows = await AuditLogModel.findAll({
       where,
       order: [
         ['occurredAt', 'DESC'],
@@ -72,7 +74,17 @@ export class SequelizeAuditLogRepository implements AuditLogRepository {
       limit,
       offset,
     });
-    return { rows: rows.map(toRecord), total: count };
+    // COUNT ACOTADO: cuenta hasta CAP+1 y para (el subquery con LIMIT no escanea
+    // más). El listado muestra "CAP+" cuando hay más; suficiente para paginar y
+    // deja de depender del tamaño total de la bitácora.
+    const CAP = 10000;
+    const { sql, replacements } = buildAuditWhereSql(organizationId, params);
+    const countRows = (await AuditLogModel.sequelize!.query(
+      `SELECT COUNT(*) AS c FROM (SELECT 1 FROM audit_logs WHERE ${sql} LIMIT ${CAP + 1}) t`,
+      { replacements, type: QueryTypes.SELECT },
+    )) as Array<{ c: number }>;
+    const total = Number(countRows[0]?.c ?? 0);
+    return { rows: rows.map(toRecord), total };
   }
 
   async findById(organizationId: string, id: string): Promise<AuditLogRecord | null> {
