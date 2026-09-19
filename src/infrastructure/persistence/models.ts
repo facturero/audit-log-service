@@ -96,7 +96,9 @@ AuditLogModel.init(
     tableName: 'audit_logs',
     timestamps: false,
     indexes: [
-      { name: 'audit_logs_org_occurred', fields: ['organizationId', 'occurredAt'] },
+      // Incluye id para que el listado (ORDER BY occurred_at DESC, id DESC) salga
+      // del índice sin filesort. Sustituye a audit_logs_org_occurred.
+      { name: 'audit_logs_org_occurred_id', fields: ['organizationId', 'occurredAt', 'id'] },
       { name: 'audit_logs_org_event_occurred', fields: ['organizationId', 'event', 'occurredAt'] },
       { name: 'audit_logs_org_user_occurred', fields: ['organizationId', 'userId', 'occurredAt'] },
     ],

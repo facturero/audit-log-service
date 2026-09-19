@@ -67,9 +67,13 @@ export class SequelizeAuditLogRepository implements AuditLogRepository {
     // las filas del org (94k+) → 0.7s warm / ~10s en frío y timeouts bajo carga.
     const rows = await AuditLogModel.findAll({
       where,
+      // id DESC (no ASC): con ambos DESC el índice (organization_id, occurred_at,
+      // id) sirve el orden con un scan hacia atrás y evita el filesort de todas
+      // las filas del org (que costaba ~378ms por petición). El id es solo
+      // desempate estable, su dirección no cambia la semántica.
       order: [
         ['occurredAt', 'DESC'],
-        ['id', 'ASC'],
+        ['id', 'DESC'],
       ],
       limit,
       offset,
