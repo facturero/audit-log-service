@@ -3,6 +3,10 @@ import { AuditDraft } from '../../domain/audit-entry.js';
 import { AuditLogRecord, AuditLogRepository } from '../../domain/repositories.js';
 import { buildAuditWhere, buildAuditWhereSql, buildRangeSql, ListParams } from '../../application/list-query.js';
 import { AuditLogModel } from './models.js';
+import { CountCache } from './count-cache.js';
+
+// TTL del total del listado (ms). 0 desactiva el cache.
+const auditCountCache = new CountCache(Number(process.env.AUDIT_COUNT_CACHE_TTL_MS ?? 10000));
 
 function toRecord(row: AuditLogModel): AuditLogRecord {
   return {
@@ -83,11 +87,20 @@ export class SequelizeAuditLogRepository implements AuditLogRepository {
     // deja de depender del tamaño total de la bitácora.
     const CAP = 10000;
     const { sql, replacements } = buildAuditWhereSql(organizationId, params);
-    const countRows = (await AuditLogModel.sequelize!.query(
-      `SELECT COUNT(*) AS c FROM (SELECT 1 FROM audit_logs WHERE ${sql} LIMIT ${CAP + 1}) t`,
-      { replacements, type: QueryTypes.SELECT },
-    )) as Array<{ c: number }>;
-    const total = Number(countRows[0]?.c ?? 0);
+    // Aun acotado, recorre hasta 10.001 entradas del indice (~13 ms de MySQL por
+    // peticion, 10 veces mas que la pagina): se cachea unos segundos por organizacion
+    // y filtros (ver count-cache.ts). La pagina de arriba nunca se cachea.
+    const total = await auditCountCache.get(
+      organizationId,
+      JSON.stringify([params.event, params.userId, params.targetId, params.from, params.to, params.search, params.includePlatform]),
+      async () => {
+        const countRows = (await AuditLogModel.sequelize!.query(
+          `SELECT COUNT(*) AS c FROM (SELECT 1 FROM audit_logs WHERE ${sql} LIMIT ${CAP + 1}) t`,
+          { replacements, type: QueryTypes.SELECT },
+        )) as Array<{ c: number }>;
+        return Number(countRows[0]?.c ?? 0);
+      },
+    );
     return { rows: rows.map(toRecord), total };
   }
 
