@@ -89,6 +89,10 @@ spec:
                   key: url
             - name: PORT
               value: "3012"
+            - name: OTEL_SERVICE_NAME
+              value: "audit-log-service"
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: "http://otel-collector.observability.svc.cluster.local:4318"
             - name: CORS_ORIGIN
               value: "https://crm.noahsolution.com"
             # 0 = conservar para siempre. Una bitácora no se purga sola sin que

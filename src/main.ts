@@ -1,3 +1,4 @@
+import './infrastructure/telemetry/otel.js';
 import { serve } from '@hono/node-server';
 import { loadConfig } from './config.js';
 import { AuditLogService } from './application/audit-logs.js';
