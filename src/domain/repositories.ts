@@ -29,7 +29,7 @@ export interface AuditLogRepository {
     limit: number,
     offset: number,
   ): Promise<{ rows: AuditLogRecord[]; total: number }>;
-  findById(organizationId: string, id: string): Promise<AuditLogRecord | null>;
+  findById(organizationId: string, id: string, includePlatform?: boolean): Promise<AuditLogRecord | null>;
   summaryByEvent(
     organizationId: string,
     range: { from?: string; to?: string },

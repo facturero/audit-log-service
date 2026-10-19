@@ -86,8 +86,8 @@ export class AuditLogService {
     };
   }
 
-  async getById(organizationId: string, id: string): Promise<AuditLogDetailDTO | null> {
-    const row = await this.repo.findById(organizationId, id);
+  async getById(organizationId: string, id: string, includePlatform = false): Promise<AuditLogDetailDTO | null> {
+    const row = await this.repo.findById(organizationId, id, includePlatform);
     if (!row) return null;
     return { ...toListItem(row), payload: row.payload };
   }
