@@ -53,6 +53,26 @@ describe('HTTP', () => {
     expect(body).toMatchObject({ items: [], total: 0, limit: 50, offset: 0 });
   });
 
+  it('includePlatform se ignora sin el permiso de plataforma', async () => {
+    const list = vi.fn().mockResolvedValue({ items: [], total: 0, limit: 50, offset: 0 });
+    const app = buildApp({ list } as Partial<AuditLogService>);
+    await app.request('/audit-logs?includePlatform=true', { headers: WITH_PERMS });
+    expect(list).toHaveBeenCalledWith(ORG, expect.objectContaining({ includePlatform: false }));
+  });
+
+  it('includePlatform se respeta con plugins:admin, también en el detalle', async () => {
+    const list = vi.fn().mockResolvedValue({ items: [], total: 0, limit: 50, offset: 0 });
+    const getById = vi.fn().mockResolvedValue(null);
+    const app = buildApp({ list, getById } as Partial<AuditLogService>);
+    const headers = { ...WITH_PERMS, 'X-Permissions': 'audit:read, plugins:admin' };
+    await app.request('/audit-logs?includePlatform=true', { headers });
+    expect(list).toHaveBeenCalledWith(ORG, expect.objectContaining({ includePlatform: true }));
+    await app.request('/audit-logs/evt-1', { headers });
+    expect(getById).toHaveBeenCalledWith(ORG, 'evt-1', true);
+    await app.request('/audit-logs/evt-1', { headers: WITH_PERMS });
+    expect(getById).toHaveBeenLastCalledWith(ORG, 'evt-1', false);
+  });
+
   it('/audit-logs/summary no lo captura la ruta :id', async () => {
     const app = buildApp();
     const res = await app.request('/audit-logs/summary', { headers: WITH_PERMS });

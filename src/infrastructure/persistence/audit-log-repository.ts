@@ -104,14 +104,13 @@ export class SequelizeAuditLogRepository implements AuditLogRepository {
     return { rows: rows.map(toRecord), total };
   }
 
-  async findById(organizationId: string, id: string): Promise<AuditLogRecord | null> {
-    // Los eventos de plataforma (organization_id NULL) también son visibles en
-    // detalle: si se listan con includePlatform, abrirlos no puede dar 404.
+  async findById(organizationId: string, id: string, includePlatform = false): Promise<AuditLogRecord | null> {
+    // Los eventos de plataforma (organization_id NULL) se abren en detalle
+    // solo si quien consulta puede listarlos (includePlatform).
     const row = await AuditLogModel.findOne({
-      where: {
-        id,
-        [Op.or]: [{ organizationId }, { organizationId: null }],
-      },
+      where: includePlatform
+        ? { id, [Op.or]: [{ organizationId }, { organizationId: null }] }
+        : { id, organizationId },
     });
     return row ? toRecord(row) : null;
   }
