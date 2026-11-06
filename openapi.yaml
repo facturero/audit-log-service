@@ -57,6 +57,14 @@ components:
         requestId: { type: string, nullable: true }
         occurredAt: { type: string, format: date-time }
         summary: { type: string, example: invoice issued }
+        via:
+          type: object
+          nullable: true
+          description: "Automatización que ejecutó el cambio en nombre de userId (payload.via del evento); null = lo hizo la persona"
+          properties:
+            type: { type: string, example: rule, description: "rule | form (hoy, projects-service)" }
+            id: { type: string, nullable: true }
+            name: { type: string, nullable: true, example: Cerrar al terminar }
     AuditLogDetail:
       allOf:
         - $ref: '#/components/schemas/AuditLogListItem'

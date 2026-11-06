@@ -15,6 +15,14 @@ export interface AuditLogListItemDTO {
   requestId: string | null;
   occurredAt: string;
   summary: string;
+  /** Si el cambio lo hizo una automatización en nombre de `userId` (una regla, un formulario), cuál. null = lo hizo la persona. */
+  via: AuditOriginDTO | null;
+}
+
+export interface AuditOriginDTO {
+  type: string;
+  id: string | null;
+  name: string | null;
 }
 
 export interface AuditLogDetailDTO extends AuditLogListItemDTO {
@@ -39,6 +47,23 @@ export interface AuditLogSummaryDTO {
   byUser: SummaryRowDTO[];
 }
 
+/**
+ * `via` es una convención del payload (hoy la usa projects-service para reglas y formularios): el actor es quien DISPARÓ el cambio y
+ * `via` dice qué automatización lo ejecutó. Se valida la forma porque el payload es de otro servicio: algo raro se ignora, no rompe
+ * la lista.
+ */
+export function originOf(payload: Record<string, unknown> | null): AuditOriginDTO | null {
+  const via = payload?.via;
+  if (!via || typeof via !== 'object' || Array.isArray(via)) return null;
+  const { type, id, name } = via as Record<string, unknown>;
+  if (typeof type !== 'string' || !type.trim()) return null;
+  return {
+    type: type.slice(0, 32),
+    id: typeof id === 'string' ? id.slice(0, 64) : null,
+    name: typeof name === 'string' ? name.slice(0, 200) : null,
+  };
+}
+
 function toListItem(row: AuditLogRecord): AuditLogListItemDTO {
   return {
     id: row.id,
@@ -53,6 +78,7 @@ function toListItem(row: AuditLogRecord): AuditLogListItemDTO {
     requestId: row.requestId,
     occurredAt: row.occurredAt.toISOString(),
     summary: summarize(row.event),
+    via: originOf(row.payload),
   };
 }
 
