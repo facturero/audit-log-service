@@ -21,6 +21,17 @@ const listQuerySchema = z.object({
 
 export type AuditLogQueryContext = Context<{ Variables: ContextVariables }>;
 
+/** Los eventos de plataforma (organization_id NULL: registros, logins sin
+ *  organización, descuentos globales…) traen correos e IPs de usuarios de
+ *  cualquier organización. Solo los ve el administrador de plataforma; a los
+ *  demás `includePlatform` se les ignora y ven solo su organización. */
+export const PLATFORM_AUDIT_PERMISSION = 'plugins:admin';
+
+function canSeePlatform(c: AuditLogQueryContext): boolean {
+  const permissions = (c.get('permissions') as string[] | undefined) ?? [];
+  return permissions.includes(PLATFORM_AUDIT_PERMISSION) || permissions.includes('*');
+}
+
 function invalidQuery(c: AuditLogQueryContext, error: z.ZodError): Response {
   return c.json(
     {
@@ -39,7 +50,8 @@ export function listController(service: AuditLogService) {
     if (!parsed.success) return invalidQuery(c, parsed.error);
 
     const organizationId = c.get('organizationId');
-    const page: AuditLogPageDTO = await service.list(organizationId, parsed.data);
+    const params = { ...parsed.data, includePlatform: parsed.data.includePlatform && canSeePlatform(c) };
+    const page: AuditLogPageDTO = await service.list(organizationId, params);
     return c.json(page, 200);
   };
 }
@@ -48,7 +60,7 @@ export function detailController(service: AuditLogService) {
   return async (c: AuditLogQueryContext) => {
     const organizationId = c.get('organizationId');
     const id = c.req.param('id') ?? '';
-    const detail = await service.getById(organizationId, id);
+    const detail = await service.getById(organizationId, id, canSeePlatform(c));
     if (!detail) {
       return c.json({ error: { code: 'NOT_FOUND', message: 'Evento de auditoría no encontrado' } }, 404);
     }
