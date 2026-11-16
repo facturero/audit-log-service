@@ -39,11 +39,22 @@ export function loadConfig(): Config {
  * desactivar un módulo de pago es justo lo que una bitácora debe registrar.
  *
  * Ahora se audita TODO lo que pase por el exchange (handler comodín) y esta
- * lista existe solo para callar ruido concreto y demostrado. Empieza vacía a
- * propósito: quitar de la bitácora es una decisión, no un olvido.
+ * lista existe solo para callar ruido concreto y demostrado. Quitar de la
+ * bitácora es una decisión, no un olvido: cada entrada lleva su porqué.
+ *
+ * Una entrada que termina en `.` es un PREFIJO (`chat.message.` calla
+ * `chat.message.created`, `.updated`…); si no, se compara exacto.
  */
-export const AUDIT_DENYLIST: readonly string[] = [];
+export const AUDIT_DENYLIST: readonly string[] = [
+  // Mensajería (chat-service, decisión del dueño 2026-11-14): la bitácora registra solo crear, renombrar y archivar canales.
+  // Mensajes, reacciones, entradas y salidas de canales y el «leído» son conversación privada y ruido (uno por mensaje enviado).
+  // Los eventos no traen texto, pero sí quién habló con quién y cuándo: tampoco eso es auditoría de la empresa.
+  'chat.message.',
+  'chat.reaction.',
+  'chat.member.',
+  'chat.conversation.read',
+];
 
 export function isAudited(routingKey: string): boolean {
-  return !AUDIT_DENYLIST.includes(routingKey);
+  return !AUDIT_DENYLIST.some((entry) => (entry.endsWith('.') ? routingKey.startsWith(entry) : routingKey === entry));
 }
